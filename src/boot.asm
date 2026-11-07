@@ -1,0 +1,321 @@
+INCLUDE "boot_h.asm"
+INCLUDE "sys/kernel_api.asm"
+INCLUDE "dev/mmu_h.asm"
+INCLUDE "dev/mmu.asm"
+INCLUDE "board_h.asm"
+INCLUDE "board.asm"
+INCLUDE "sys/delay_h.asm"
+INCLUDE "sys/delay.asm"
+INCLUDE "dev/sio_h.asm"
+INCLUDE "dev/sio.asm"
+INCLUDE "dev/pio_h.asm"
+INCLUDE "dev/pio.asm"
+INCLUDE "sys/semaphore.asm"
+INCLUDE "sys/util_h.asm"
+INCLUDE "sys/util.asm"
+INCLUDE "str.asm"
+;INCLUDE "terminal.asm"
+INCLUDE "device/mouse.asm"
+INCLUDE "dev/i2c_s_h.asm"
+INCLUDE "dev/i2c_s.asm"
+;INCLUDE "device/eep_24_i2c.asm"
+INCLUDE "device/ssd1306_h.asm"
+INCLUDE "device/ssd1306.asm"
+INCLUDE "dev/spi_m_s_h.asm"
+INCLUDE "device/cf.asm"
+INCLUDE "fs/fat_fs_h.asm"
+INCLUDE "fs/fat_fs.asm"
+
+EXTERN __KERNEL_BSS_head
+EXTERN __KERNEL_BSS_size
+EXTERN __KERNEL_STACK_tail
+
+SECTION KERNEL_BSS
+
+SIOA_ADDRESS:
+DEFB 0
+PIOA_REGS:
+DEFS 3
+PIOA_IO_CFG_ADDRESS:
+DEFB 0
+PIOA_IO_DAT_ADDRESS:
+DEFB 0
+
+SIOB_ADDRESS:
+DEFB 0
+PIOB_REGS:
+DEFS 3
+PIOB_IO_CFG_ADDRESS:
+DEFB 0
+PIOB_IO_DAT_ADDRESS:
+DEFB 0
+
+CF1_DISK_PARAM:
+DEFS DISK_PARAM_LEN
+
+SECTION KERNEL_NOINIT_DATA
+EEPROM_BUFFER:
+DEFC EEPROM_HEADER_LEN = 3
+DEFC EEPROM_BUFFER_LEN = 64
+DEFS EEPROM_BUFFER_LEN
+
+CF_BUF:
+DEFS 512
+
+FAT_FS_DISK_IDX:
+DEFS FAT_IDX_STRUCT_LEN
+FAT_FS_DISK_DATA:
+DEFS FAT_DATA_STRUCT_LEN
+
+SECTION KERNEL_CORE
+
+;NEW_LINE_STR:
+;DEFB "\r\n\0"
+;SET_SCREEN_SIZE_STR:
+;DEFB "\e[8;64;128t"
+;CLEAR_SCREEN_STR:
+;DEFB "\ec"
+;CLEAR_BACKLOG_STR:
+;DEFB "\e[3J\0"
+;START_MSG_STR:
+;DEFB "Starting UP\r\n\0"
+;MOUSE_ERR_STR:
+;DEFB "\r\nMouse init ERR\r\n\0"
+;EEPROM_READ_ERR_STR:
+;DEFB "\r\nEEPROM read ERR\r\n\0"
+;CF_OK_STR:
+;DEFB "\r\nCF Init OK\r\n\0"
+;CF_ERR_STR:
+;DEFB "\r\nCF Init ERR\r\n\0"
+;CF_READ_OK_STR:
+;DEFB "\r\nCF Read OK\r\n\0"
+;CF_READ_ERR_STR:
+;DEFB "\r\nCF Read ERR\r\n\0"
+;CF_READ_DONE_STR:
+;DEFB "\r\n\r\nCF Read DONE\r\n\0"
+
+;SPI_INIT:
+	;SPI_MASTER_INIT_MACRO(PIOB_C, PIOB_D, PIOB_REGS, SPI_CLK_PIN_MASK, SPI_MOSI_PIN_MASK, SPI_MISO_PIN_MASK)
+	;PIO_SET_OUT_ADDR((SPI_CS0_PIN_MASK | SPI_CS1_PIN_MASK), PIOB_D, PIOB_REGS)
+	;PIO_DIR_OUTPUT_ADDR((SPI_CS0_PIN_MASK | SPI_CS1_PIN_MASK), PIOB_C, PIOB_REGS)
+	;ret
+
+boot:
+	;MMU_INIT()
+	MMU_SET_ADDR(MMU_RAM_ADDR, IO_MMU_BANK_0)
+	;ld sp, 32767; For the NMI interupt after MMU enable, if NMI pin is asserted.
+	MMU_ENABLE()
+BOOT_COPY_CODE_TO_RAM:
+	;ld hl, 0
+	;ld de, 16384
+	;ld bc, 16384
+	;ldir
+	;We switch to run the code from RAM
+	;MMU_SET_ADDR(MMU_RAM_ADDR, IO_MMU_BANK_0)
+BOOT_CLEAR_KERNEL_BSS:
+	ld hl, __KERNEL_BSS_head
+	ld de, __KERNEL_BSS_head + 1
+	ld bc, __KERNEL_BSS_size - 1
+	ld (hl), 0
+	ldir
+BOOT_SET_SP:
+	ld sp, __KERNEL_STACK_tail
+	call board_SetLcdRstDeAsserted
+BOOT_INIT_PIOA:	
+	PIO_INIT(PIO_BASE_ADDR, 0, PIOA_IO_DAT_ADDRESS, PIOA_IO_CFG_ADDRESS, PIOA_REGS)
+BOOT_INIT_PIOB:	
+	PIO_INIT(PIO_BASE_ADDR, 1, PIOB_IO_DAT_ADDRESS, PIOB_IO_CFG_ADDRESS, PIOB_REGS)
+;-------------------------------------------------------------------------------------
+BOOT_INIT_SIO:	
+	call sio_Init
+BOOT_INIT_SIOA:	
+	SIO_INIT(SIO_BASE_ADDR, 0, SIO_DEG4_CLOCK_MODE_X32_m, SIO_DEG3_RX_CHAR_LEN_8BIT_m, SIO_DEG5_TX_CHAR_LEN_8BIT_m, SIOA_ADDRESS)
+BOOT_INIT_SIOB:	
+	SIO_INIT(SIO_BASE_ADDR, 1, SIO_DEG4_CLOCK_MODE_X1_m,  SIO_DEG3_RX_CHAR_LEN_8BIT_m, SIO_DEG5_TX_CHAR_LEN_8BIT_m, SIOB_ADDRESS)
+;-------------------------------------------------------------------------------------
+BOOT_INIT_I2C:	
+	call i2cs_RST
+BOOT_INIT_SET_SCREEN_SIZE:	
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\e[8;64;128t")
+BOOT_INIT_PRINT_START_MSG:	
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nStarting UP\r\n")
+;BOOT_INIT_MOUSE:
+;	BOARD_LOAD_IO_ADDR(SIOB_ADDRESS)
+;	call mouse_Init
+;	jr z, mouseInitNoError
+;BOOT_INIT_MOUSE_ERR:
+;	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nMouse init ERR\r\n")
+;mouseInitNoError:
+;-------------------------------------------------------------------------------------
+BOOT_INIT_READ_EEPROM:
+	ld a, 0xA0
+	ld (EEPROM_BUFFER), a
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nEEPROM Read: 0x")
+	xor a
+	ld (EEPROM_BUFFER + 2), a
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	xor a
+	;inc a
+	;inc a
+	ld (EEPROM_BUFFER + 1), a
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+	ld b, 3
+	ld de, EEPROM_BUFFER_LEN
+	ld hl, EEPROM_BUFFER
+	call i2cs_R
+	SIO_PRINT_HEX_BUF(SIOA_ADDRESS, 0, EEPROM_BUFFER + EEPROM_HEADER_LEN, EEPROM_BUFFER_LEN)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\n\n")
+;-------------------------------------------------------------------------------------
+BOOT_INIT_SSD1306:
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nSSD1306 Init..")
+	call i2cs_ssd1306_Init
+	call i2cs_ssd1306_WrBuffer
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "OK")
+;-------------------------------------------------------------------------------------
+	SPI_MASTER_INIT_MACRO(PIOB_C, PIOB_D, PIOB_REGS, SPI_CLK_PIN_MASK, SPI_MOSI_PIN_MASK, SPI_MISO_PIN_MASK)
+;-------------------------------------------------------------------------------------
+	DISK_INIT_P(CF1_DISK_PARAM, cf_Init)
+	jr nz, cf_Init_Error
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nCF Init: OK\r\n")
+	jr cf_Init_Err_Skip
+cf_Init_Error:
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nCF Init: ERR\r\n")
+	jp cf_Initialization_Error
+cf_Init_Err_Skip:
+
+;-------------------------------------------------------------------------------------
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "FS INIT...")
+	ld bc, cf_Read
+	ld de, cf_Write
+	ld hl, CF1_DISK_PARAM
+	ld iy, FAT_FS_DISK_IDX
+	call FATFS_MOUNT
+	jr Z, FATFS_INIT_OK
+	jp FATFS_INIT_ERROR
+FATFS_INIT_OK:
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "OK\r\n")
+	SIO_PRINT_HEX_BUF(SIOA_ADDRESS, 0, FAT_FS_DISK_IDX + FAT_IDX_BUFFER, FAT_IDX_BUFFER_LEN)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Sectors per cluster:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_SECTORS_PER_CLUSTER + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Clusters in partition:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_CLUSTERS_IN_PARTITION + 3)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_CLUSTERS_IN_PARTITION + 2)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_CLUSTERS_IN_PARTITION + 1)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_CLUSTERS_IN_PARTITION + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Index partition size:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_SIZE + 3)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_SIZE + 2)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_SIZE + 1)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_SIZE + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Partition size:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_PARTITION_SIZE + 3)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_PARTITION_SIZE + 2)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_PARTITION_SIZE + 1)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_PARTITION_SIZE + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Index table offset:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_OFFSET + 3)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_OFFSET + 2)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_OFFSET + 1)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_INDEX_TABLE_OFFSET + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "Data table offset:\r\n")
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_TABLE_OFFSET + 3)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_TABLE_OFFSET + 2)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_TABLE_OFFSET + 1)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	ld a, (FAT_FS_DISK_IDX + FAT_IDX_DATA_TABLE_OFFSET + 0)
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+
+	;SIO_PRINT_STR_BUF(SIOA_ADDRESS, 0, FAT_FS_DISK_IDX + FAT_IDX_BUFFER + FAT_PARTITION_BOOT_REC_FAT_NAME, 8)
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n\r\n")
+	;jr cf_Read_Ok_Skip	
+FATFS_INIT_ERROR:
+;	DISK_WRITE_CONST_ADDR_P(CF1_DISK_PARAM, 0)
+;	DISK_WRITE_CONST_BLOCKS_P(CF1_DISK_PARAM, 1)
+;	DISK_WRITE_CONST_BUFF_P(CF1_DISK_PARAM, CF_BUF)
+	
+;	ld b, 1
+;	xor a
+;cf_Read_Ok_Loop:
+;	ld a, b
+;	dec a
+;	ld (ix + DISK_ADDRESS + 3), a
+;	DISK_READ_P(CF1_DISK_PARAM)
+	
+;	or a
+;	jr z, cf_Read_Ok
+;cf_Read_Err:
+;	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nCF Read ERR\r\n")
+;	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+;	jr cf_Read_Ok_Skip
+;cf_Read_Ok:
+;	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\nCF Read: 0x")
+;	ld a, b
+;	dec a
+;	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+;	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n")
+;	SIO_PRINT_HEX_BUF(SIOA_ADDRESS, 0, CF_BUF, 512)
+;cf_Read_Ok_Skip:
+;	djnz _cf_Read_Ok_Loop
+;	jr cf_Read_Ok_Loop_N
+;_cf_Read_Ok_Loop:
+;	jp cf_Read_Ok_Loop
+;cf_Read_Ok_Loop_N:
+cf_Initialization_Error:
+	SIO_PRINT_STR(SIOA_ADDRESS, 0, "\r\n\r\nCF Read DONE\r\n")
+	
+;-------------------------------------------------------------------------------------
+loop:
+	;DELAYMS(1000)
+	SIO_READ_NONBLOCKING(SIOA_ADDRESS, 0)
+	jr nz, sendChar
+	SIO_READ_NONBLOCKING(SIOB_ADDRESS, 0)
+	jr nz, sendHex
+	jr loop
+
+sendChar:
+	ld d, a
+	cp a, '\r'
+	jr nz, skipNextLine
+	ld a, '\n'
+	SIO_PRINT_CHAR(SIOA_ADDRESS, 0)
+skipNextLine:
+	ld a, d
+	SIO_PRINT_CHAR(SIOA_ADDRESS, 0)
+	jp loop
+
+sendHex:
+	SIO_PRINT_HEX_CHAR(SIOA_ADDRESS, 0)
+	jp loop
